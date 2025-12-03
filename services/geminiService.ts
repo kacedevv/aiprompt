@@ -1,12 +1,18 @@
 import { GoogleGenAI } from "@google/genai";
 
-const apiKey = process.env.API_KEY;
+// 👉 Đặt biến này trong Vercel: GEMINI_API_KEY
+// Project Settings → Environment Variables → KEY = GEMINI_API_KEY, VALUE = <api key của bạn>
+const apiKey = process.env.GEMINI_API_KEY;
 
 if (!apiKey) {
-  console.error("API_KEY is not defined in the environment.");
+  throw new Error(
+    "Thiếu GEMINI_API_KEY. Hãy cấu hình trong Vercel Project Settings → Environment Variables."
+  );
 }
 
-const ai = new GoogleGenAI({ apiKey: apiKey || 'dummy-key-for-build' });
+// File này phải chạy ở môi trường server (API route / serverless function),
+// không import trực tiếp vào component client để tránh lộ key.
+const ai = new GoogleGenAI({ apiKey });
 
 /**
  * Edits an image using Gemini 2.5 Flash Image ("Nano Banana").
@@ -32,7 +38,7 @@ export const editImageWithGemini = async (
     if (response.candidates && response.candidates[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData && part.inlineData.data) {
-           return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+          return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
         }
       }
     }
@@ -58,8 +64,8 @@ export const generateMeme = async (
     const parts: any[] = [{ text: finalPrompt }];
 
     if (base64Image) {
-        const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
-        parts.unshift({ inlineData: { data: cleanBase64, mimeType: 'image/png' } });
+      const cleanBase64 = base64Image.replace(/^data:image\/(png|jpeg|jpg|webp);base64,/, '');
+      parts.unshift({ inlineData: { data: cleanBase64, mimeType: 'image/png' } });
     }
 
     const response = await ai.models.generateContent({
@@ -70,7 +76,7 @@ export const generateMeme = async (
     if (response.candidates && response.candidates[0].content.parts) {
       for (const part of response.candidates[0].content.parts) {
         if (part.inlineData && part.inlineData.data) {
-           return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
+          return `data:${part.inlineData.mimeType || 'image/png'};base64,${part.inlineData.data}`;
         }
       }
     }
