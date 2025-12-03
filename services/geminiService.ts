@@ -6,25 +6,31 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const BFL_API_KEY = process.env.BFL_API_KEY;
 
 if (!GEMINI_API_KEY) {
-  throw new Error("Thiếu GEMINI_API_KEY. Hãy cấu hình trong Vercel → Settings → Environment Variables.");
+  throw new Error(
+    "Thiếu GEMINI_API_KEY. Hãy cấu hình trong Vercel → Project → Settings → Environment Variables."
+  );
 }
 
 if (!BFL_API_KEY) {
-  throw new Error("Thiếu BFL_API_KEY. Hãy vào https://api.bfl.ai để lấy key và cấu hình trong Vercel.");
+  throw new Error(
+    "Thiếu BFL_API_KEY. Hãy vào https://api.bfl.ai để lấy key và cấu hình trong Vercel."
+  );
 }
 
+// ✅ Gemini dùng cho text (profile + rewrite)
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+
+// ✅ Endpoint chung của FLUX API
 const BFL_BASE_URL = "https://api.bfl.ai/v1";
 
-/**
- * Helper: đợi ms mili giây
- */
+/* -------------------------------------------------------------------------- */
+/*  Helper chung                                                              */
+/* -------------------------------------------------------------------------- */
+
+/** Đợi ms mili giây */
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
-/**
- * Helper: poll kết quả từ BFL cho tới khi status = "Ready"
- * Trả về: URL ảnh (signed URL, sống ~10 phút)
- */
+/** Poll kết quả từ BFL cho đến khi status = "Ready" → trả về URL ảnh (signed URL ~10 phút) */
 const pollBflResult = async (pollingUrl: string): Promise<string> => {
   for (let i = 0; i < 40; i++) {
     await sleep(1000);
@@ -63,9 +69,7 @@ const pollBflResult = async (pollingUrl: string): Promise<string> => {
   throw new Error("BFL: Hết thời gian chờ kết quả.");
 };
 
-/**
- * Helper: tải ảnh từ URL (signed URL của BFL) và convert thành data URL base64
- */
+/** Tải ảnh từ URL (signed URL BFL) → convert thành data URL base64 để frontend dùng luôn */
 const fetchImageAsDataUrl = async (
   imageUrl: string,
   mimeType: string = "image/png"
@@ -76,8 +80,8 @@ const fetchImageAsDataUrl = async (
     throw new Error(`Tải ảnh từ BFL thất bại (${res.status}): ${text}`);
   }
 
-  const arrayBuffer = await res.arrayBuffer();
-  const base64 = Buffer.from(arrayBuffer).toString("base64");
+  const buffer = Buffer.from(await res.arrayBuffer());
+  const base64 = buffer.toString("base64");
   return `data:${mimeType};base64,${base64}`;
 };
 
@@ -86,8 +90,8 @@ const fetchImageAsDataUrl = async (
 /* -------------------------------------------------------------------------- */
 
 /**
- * Edits an image using FLUX.1 Kontext (image editing).
- * ⚠️ Giữ nguyên tên hàm để không phải sửa chỗ khác trong code.
+ * Edit ảnh dùng FLUX.1 Kontext [pro].
+ * ⚠️ Giữ nguyên tên hàm `editImageWithGemini` để không phải sửa chỗ khác trong code.
  */
 export const editImageWithGemini = async (
   base64Image: string,
@@ -113,13 +117,12 @@ export const editImageWithGemini = async (
         prompt,
         input_image: cleanBase64,
         output_format: "png", // để mình convert về data:image/png
-        // có thể thêm: safety_tolerance, seed, aspect_ratio...
+        // có thể thêm: aspect_ratio, seed, safety_tolerance...
       }),
     });
 
     if (!submitRes.ok) {
       const text = await submitRes.text();
-      // 402 = hết credits, 429 = rate limit
       if (submitRes.status === 402) {
         throw new Error(
           "Hết credits FLUX cho việc tạo/đổi ảnh. Vui lòng kiểm tra lại tài khoản BFL."
@@ -130,7 +133,9 @@ export const editImageWithGemini = async (
           "FLUX đang bị giới hạn tốc độ (rate limit). Vui lòng thử lại sau ít phút."
         );
       }
-      throw new Error(`Gửi request FLUX-Kontext lỗi (${submitRes.status}): ${text}`);
+      throw new Error(
+        `Gửi request FLUX-Kontext lỗi (${submitRes.status}): ${text}`
+      );
     }
 
     const submitJson: any = await submitRes.json();
@@ -143,7 +148,7 @@ export const editImageWithGemini = async (
     const imageUrl = await pollBflResult(pollingUrl);
 
     // 3) Tải ảnh về và convert sang data URL base64
-    return await fetchImageAsDataUrl(imageUrl, "image/png");
+    return await fetchImageAsDataUrl(imageUrl, mimeType);
   } catch (error) {
     console.error("FLUX Edit Image Error:", error);
     throw error;
@@ -155,8 +160,8 @@ export const editImageWithGemini = async (
 /* -------------------------------------------------------------------------- */
 
 /**
- * Generates a Meme using FLUX text-to-image.
- * ⚠️ Giữ nguyên tên hàm để không phải sửa chỗ khác trong code.
+ * Tạo meme từ prompt + style (dùng FLUX1.1 [pro]).
+ * ⚠️ Giữ nguyên tên hàm `generateMeme` để code cũ không phải sửa.
  */
 export const generateMeme = async (
   prompt: string,
@@ -164,21 +169,13 @@ export const generateMeme = async (
   base64Image?: string
 ): Promise<string> => {
   try {
-    const finalPrompt = `Create a meme image. Caption: "${prompt}". Style: ${style}. Ensure the text is large, bold, and easy to read.`;
+    const basePrompt = `Create a meme image. Caption: "${prompt}". Style: ${style}. Ensure the text is large, bold, and easy to read.`;
+    const fullPrompt = base64Image
+      ? basePrompt +
+        " Use a layout similar to the provided image (top and bottom text, meme style)."
+      : basePrompt;
 
-    let fullPrompt = finalPrompt;
-
-    // Nếu bạn muốn dùng ảnh gốc làm reference,
-    // hiện FLUX text-to-image ở endpoint này không nhận input_image,
-    // nên mình chỉ dùng text prompt. Nếu sau này bạn dùng model hỗ trợ img2img,
-    // có thể thay đổi ở đây.
-    if (base64Image) {
-      fullPrompt =
-        finalPrompt +
-        " Use a layout similar to the provided image (top and bottom text, meme style).";
-    }
-
-    // 1) Gửi request tạo ảnh tới FLUX (dùng flux-pro-1.1 cho chất lượng tốt)
+    // 1) Gửi request tạo ảnh tới FLUX1.1 [pro]
     const submitRes = await fetch(`${BFL_BASE_URL}/flux-pro-1.1`, {
       method: "POST",
       headers: {
@@ -218,7 +215,7 @@ export const generateMeme = async (
     // 2) Poll kết quả
     const imageUrl = await pollBflResult(pollingUrl);
 
-    // 3) Convert sang data URL base64 (để frontend dùng giống như Gemini trước đây)
+    // 3) Convert sang data URL base64 cho frontend
     return await fetchImageAsDataUrl(imageUrl, "image/png");
   } catch (error) {
     console.error("FLUX Meme Gen Error:", error);
@@ -230,10 +227,10 @@ export const generateMeme = async (
 /*  3. GEMINI – TEXT (GIỮ NGUYÊN)                                            */
 /* -------------------------------------------------------------------------- */
 
-/**
- * Generates a Notion-style Personal Profile (HTML code).
- */
-export const generateNotionProfile = async (userInfo: string): Promise<string> => {
+/** Tạo trang Notion Profile (HTML) bằng Gemini */
+export const generateNotionProfile = async (
+  userInfo: string
+): Promise<string> => {
   try {
     const prompt = `
       Create a single-file HTML (with embedded Tailwind CSS via CDN) for a Personal Profile Page in the style of "Notion" (Minimalist, emoji icons, clean typography, whitespace).
@@ -263,10 +260,11 @@ export const generateNotionProfile = async (userInfo: string): Promise<string> =
   }
 };
 
-/**
- * Rewrites text in a specific celebrity style.
- */
-export const rewriteText = async (text: string, style: string): Promise<string> => {
+/** Viết lại đoạn văn theo style (Sơn Tùng / Đen / học thuật / lãng mạn...) */
+export const rewriteText = async (
+  text: string,
+  style: string
+): Promise<string> => {
   try {
     const prompt = `
       Rewrite the following text in the Vietnamese language, mimicking the style of: ${style}.
