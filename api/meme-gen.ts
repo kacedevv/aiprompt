@@ -1,10 +1,17 @@
-// api/meme-gen.ts
-// Serverless function cho Vercel (Node runtime)
-// Dùng FLUX 1.1 Pro Ultra của BFL để tạo meme (text + optional image_prompt)
-
 export const config = {
   runtime: "nodejs",
 };
+
+function getFluxKey() {
+  const key =
+    process.env.BFL_API_KEY ||
+    process.env.VITE_FLUX_API_KEY ||
+    process.env.FLUX_API_KEY ||
+    "";
+
+  console.log("DEBUG BFL_API_KEY EXIST:", key ? "YES" : "NO");
+  return key;
+}
 
 type MemeGenRequestBody = {
   prompt?: string;
@@ -18,7 +25,8 @@ function parseBody(req: any): Promise<any> {
   return new Promise((resolve, reject) => {
     try {
       if (req.body && typeof req.body === "object") {
-        return resolve(req.body);
+        resolve(req.body);
+        return;
       }
 
       let data = "";
@@ -38,7 +46,7 @@ function parseBody(req: any): Promise<any> {
 }
 
 function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((res) => setTimeout(res, ms));
 }
 
 export default async function handler(req: any, res: any) {
@@ -52,50 +60,42 @@ export default async function handler(req: any, res: any) {
 
   res.setHeader("Access-Control-Allow-Origin", "*");
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Only POST is allowed" });
-  }
+  if (req.method !== "POST")
+    return res.status(405).json({ error: "Only POST allowed" });
 
-  const BFL_API_KEY = process.env.BFL_API_KEY;
-  if (!BFL_API_KEY) {
+  const BFL_API_KEY = getFluxKey();
+  if (!BFL_API_KEY)
     return res.status(500).json({
-      error: "Missing BFL_API_KEY in Vercel Environment Variables",
+      error: "Missing BFL_API_KEY (BFL_API_KEY / VITE_FLUX_API_KEY / FLUX_API_KEY)",
     });
-  }
 
   try {
     const body: MemeGenRequestBody = await parseBody(req);
 
     const { prompt, caption, style, imageBase64, aspectRatio } = body;
 
-    if (!prompt && !caption) {
-      return res.status(400).json({
-        error: "Missing prompt or caption",
-      });
-    }
+    if (!prompt && !caption)
+      return res.status(400).json({ error: "Missing prompt or caption" });
 
-    // Build final prompt cho meme
     const finalPrompt =
       prompt ||
       `A funny meme in ${style || "internet"} style. Caption: "${
         caption || ""
-      }". Viral, high quality.`;
+      }". Viral, HD.`;
 
-    // Payload cho BFL Flux Pro 1.1 Ultra
     const payload: any = {
       prompt: finalPrompt,
       aspect_ratio: aspectRatio || "1:1",
       output_format: "png",
     };
 
-    // Nếu có ảnh gốc, dùng làm image_prompt (ít nhất BFL nhận param này)
     if (imageBase64) {
       payload.image_prompt = imageBase64;
       payload.strength = 0.75;
     }
 
-    // 1️⃣ SUBMIT REQUEST (async) – trả về id + polling_url
-    const submitRes = await fetch("https://api.bfl.ai/v1/flux-pro-1.1-ultra", {
+    // 1️⃣ Send request
+    const submitRes = await fetch("https://api.bfl.ml/v1/flux-pro-1.1-ultra", {
       method: "POST",
       headers: {
         accept: "application/json",
@@ -105,120 +105,84 @@ export default async function handler(req: any, res: any) {
       body: JSON.stringify(payload),
     });
 
-    const submitText = await submitRes.text();
-    let submitJson: any;
-    try {
-      submitJson = JSON.parse(submitText);
-    } catch {
-      submitJson = null;
-    }
+    const submitRaw = await submitRes.text();
+    let submitJson = null;
 
-    if (!submitRes.ok) {
-      return res.status(submitRes.status).json({
-        error: "BFL API Error (submit)",
-        detail: submitJson || submitText,
+    try {
+      submitJson = JSON.parse(submitRaw);
+    } catch {}
+
+    if (!submitRes.ok)
+      return res.status(500).json({
+        error: "BFL Submit Error",
+        detail: submitJson || submitRaw,
       });
-    }
 
     const pollingUrl = submitJson?.polling_url;
-    const requestId = submitJson?.id;
-
-    if (!pollingUrl) {
+    if (!pollingUrl)
       return res.status(500).json({
-        error: "BFL API Error (submit)",
-        detail: "Missing polling_url in response",
+        error: "Missing polling_url",
+        detail: submitJson,
       });
-    }
 
-    // 2️⃣ POLL RESULT đến khi Ready / Error
-    const maxTries = 30; // ~15s (30 * 0.5s)
-    let resultJson: any = null;
-
-    for (let i = 0; i < maxTries; i++) {
+    // 2️⃣ Poll
+    let ready: any = null;
+    for (let i = 0; i < 30; i++) {
       await sleep(500);
-
       const pollRes = await fetch(pollingUrl, {
-        method: "GET",
-        headers: {
-          accept: "application/json",
-          "x-key": BFL_API_KEY,
-        },
+        headers: { accept: "application/json", "x-key": BFL_API_KEY },
       });
 
       const pollText = await pollRes.text();
-      let pollJson: any;
+      let pollJson: any = null;
       try {
         pollJson = JSON.parse(pollText);
-      } catch {
-        pollJson = null;
-      }
+      } catch {}
 
-      if (!pollRes.ok) {
-        return res.status(pollRes.status).json({
-          error: "BFL API Error (poll)",
+      if (!pollRes.ok)
+        return res.status(500).json({
+          error: "BFL Poll Error",
           detail: pollJson || pollText,
         });
-      }
 
-      const status = pollJson?.status;
-      if (status === "Ready") {
-        resultJson = pollJson;
+      if (pollJson?.status === "Ready") {
+        ready = pollJson;
         break;
       }
 
-      if (status === "Error" || status === "Failed") {
+      if (
+        pollJson?.status === "Error" ||
+        pollJson?.status === "Failed" ||
+        pollJson?.status === "Content Moderated"
+      ) {
         return res.status(500).json({
-          error: "BFL API Error",
+          error: "BFL Processing Failed",
           detail: pollJson,
         });
       }
-
-      // Nếu vẫn Pending/Processing → tiếp tục vòng lặp
     }
 
-    if (!resultJson) {
-      return res.status(504).json({
-        error: "BFL API Timeout",
-        detail: `Request ${requestId || ""} did not finish in time`,
-      });
-    }
+    if (!ready)
+      return res.status(500).json({ error: "Timeout", detail: "No Ready" });
 
-    const sampleUrl = resultJson?.result?.sample;
-    if (!sampleUrl) {
+    const sample = ready?.result?.sample;
+    if (!sample)
       return res.status(500).json({
-        error: "BFL API Error",
-        detail: "Missing result.sample in Ready response",
+        error: "Missing sample URL",
+        detail: ready,
       });
-    }
 
-    // 3️⃣ DOWNLOAD ảnh từ sampleUrl → convert base64 để gửi cho frontend
-    const imgRes = await fetch(sampleUrl);
-    if (!imgRes.ok) {
-      const t = await imgRes.text();
-      return res.status(500).json({
-        error: "Failed to download image from BFL delivery URL",
-        detail: t,
-      });
-    }
+    // 3️⃣ Download final image
+    const imgRes = await fetch(sample);
+    const buffer = Buffer.from(await imgRes.arrayBuffer());
+    const base64 = `data:image/png;base64,${buffer.toString("base64")}`;
 
-    const arrayBuffer = await imgRes.arrayBuffer();
-    const base64 = Buffer.from(arrayBuffer).toString("base64");
-    const imageBase64Result = `data:image/png;base64,${base64}`;
-
-    // 4️⃣ Trả về cho frontend
     return res.status(200).json({
       success: true,
-      result: {
-        id: requestId,
-        sample: sampleUrl, // URL ảnh (signed)
-        imageBase64: imageBase64Result, // để bạn render trực tiếp trong <img src="..." />
-      },
+      result: { sample, imageBase64: base64 },
     });
-  } catch (err: any) {
-    console.error("Meme Gen Error:", err);
-    return res.status(500).json({
-      error: "Meme generation failed",
-      detail: err?.message || String(err),
-    });
+  } catch (e: any) {
+    console.error("MemeGen Error:", e);
+    return res.status(500).json({ error: "Internal Error", detail: e.message });
   }
 }
