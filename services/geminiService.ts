@@ -1,84 +1,76 @@
 import { GoogleGenAI } from "@google/genai";
 
-// 🔑 Lấy API key từ Vercel Environment Variables
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const BFL_API_KEY = process.env.BFL_API_KEY; // FLUX image generation
+// 🧠 GEMINI cho text (chạy trên frontend)
+// Dùng biến Vite: VITE_GEMINI_API_KEY
+const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as
+  | string
+  | undefined;
 
-// ❗Kiểm tra API keys
 if (!GEMINI_API_KEY) {
-  throw new Error("❌ Missing GEMINI_API_KEY in Vercel Environment Variables.");
-}
-if (!BFL_API_KEY) {
-  console.warn("⚠️ Missing BFL_API_KEY. Image generation will not work.");
+  throw new Error(
+    "❌ Missing VITE_GEMINI_API_KEY. Hãy set trong .env hoặc Vercel."
+  );
 }
 
 // Gemini client
 const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 /**
- * GENERIC FLUX API HANDLER
- * Using BFL.ai endpoint for Flux Pro.
+ * Helper: gọi API backend (meme-gen / photo-editor)
  */
-async function callFluxApi(
-  prompt: string,
-  imageBase64?: string,
-  aspectRatio?: string
-): Promise<string> {
+async function callBackend<T = any>(path: string, body: any): Promise<T> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
 
-  if (!BFL_API_KEY) {
-    throw new Error("Missing BFL_API_KEY in Vercel Environment Variables.");
+  if (!res.ok) {
+    try {
+      const err = await res.json();
+      throw new Error(err.error || err.detail || `Request failed: ${res.status}`);
+    } catch {
+      const text = await res.text();
+      throw new Error(text || `Request failed: ${res.status}`);
+    }
   }
 
-  const ENDPOINT = "https://api.bfl.ml/v1/flux-pro-1.1-ultra";
-
-  try {
-    const payload: any = {
-      prompt,
-      aspect_ratio: aspectRatio || "1:1",
-      output_format: "png",
-      safety_tolerance: 2
-    };
-
-    if (imageBase64) {
-      payload.image_prompt = imageBase64;
-      payload.strength = 0.75;
-    }
-
-    const response = await fetch(ENDPOINT, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Key": BFL_API_KEY
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const err = await response.json();
-      throw new Error(`Flux API Error: ${err.detail || response.statusText}`);
-    }
-
-    const data = await response.json();
-    return data.result?.sample || data.output || "";
-  } catch (error) {
-    console.error("Flux API Call Failed:", error);
-    throw new Error("Flux Image Generation Service Unavailable.");
-  }
+  return res.json();
 }
 
 /**
- * Edit image with Flux
+ * 📷 Photo Editor (dùng BFL qua backend /api/photo-editor)
  */
 export const editImageWithGemini = async (
   base64Image: string,
   prompt: string,
   mimeType: string = "image/png"
 ): Promise<string> => {
-  return await callFluxApi(`Edit this image: ${prompt}`, base64Image);
+  const data = await callBackend<any>("/api/photo-editor", {
+    prompt,
+    mode: "edit",
+    imageBase64: base64Image,
+  });
+
+  const result = data.result ?? data;
+
+  // Cố gắng lấy base64 từ nhiều field khác nhau cho chắc
+  const img =
+    result.imageBase64 ||
+    result.sample ||
+    result.output ||
+    result.result?.sample ||
+    "";
+
+  if (!img) {
+    throw new Error("Photo Editor: No image returned from API.");
+  }
+
+  return img;
 };
 
 /**
- * Meme Generator
+ * 😂 Meme Generator (dùng BFL qua backend /api/meme-gen)
  */
 export const generateMeme = async (
   prompt: string,
@@ -86,13 +78,36 @@ export const generateMeme = async (
   base64Image?: string
 ): Promise<string> => {
   const finalPrompt = `A funny meme in ${style} style. Caption: "${prompt}". Viral, high quality.`;
-  return await callFluxApi(finalPrompt, base64Image);
+
+  const data = await callBackend<any>("/api/meme-gen", {
+    prompt: finalPrompt,
+    caption: prompt,
+    style,
+    imageBase64: base64Image,
+  });
+
+  const result = data.result ?? data;
+
+  const img =
+    result.imageBase64 ||
+    result.sample ||
+    result.output ||
+    result.result?.sample ||
+    "";
+
+  if (!img) {
+    throw new Error("Meme Gen: No image returned from API.");
+  }
+
+  return img;
 };
 
 /**
- * Notion-style Personal Profile generator
+ * 🧩 Notion-style Personal Profile generator (Gemini text)
  */
-export const generateNotionProfile = async (userInfo: string): Promise<string> => {
+export const generateNotionProfile = async (
+  userInfo: string
+): Promise<string> => {
   try {
     const prompt = `
       Create a single-file HTML (Tailwind CDN) for a Notion-style Personal Profile Page.
@@ -110,10 +125,11 @@ export const generateNotionProfile = async (userInfo: string): Promise<string> =
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: prompt
+      contents: prompt,
     });
 
-    let text = response.text || "";
+    // tuỳ phiên bản SDK, bạn đang dùng response.text nên tôi giữ nguyên
+    let text = (response as any).text || "";
     text = text.replace(/```html/g, "").replace(/```/g, "");
     return text;
   } catch (error) {
@@ -123,7 +139,7 @@ export const generateNotionProfile = async (userInfo: string): Promise<string> =
 };
 
 /**
- * Rewrite text in styles
+ * ✍️ Rewrite text in styles (Gemini text)
  */
 export const rewriteText = async (
   text: string,
@@ -141,10 +157,10 @@ export const rewriteText = async (
 
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: prompt
+      contents: prompt,
     });
 
-    return response.text || "";
+    return (response as any).text || "";
   } catch (error) {
     console.error("Rewrite Error:", error);
     throw error;
