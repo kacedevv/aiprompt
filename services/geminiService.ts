@@ -1,19 +1,24 @@
 import { GoogleGenAI } from "@google/genai";
 
-// 🔑 GEMINI cho text (frontend dùng Vite env)
+// 🔑 GEMINI (TEXT) – dùng trên frontend qua Vite env
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as
   | string
   | undefined;
 
+// Nếu chưa set thì chỉ warning, không cho app crash
 if (!GEMINI_API_KEY) {
   console.warn(
-    "⚠️ VITE_GEMINI_API_KEY chưa được set. Các chức năng text (rewrite, profile) có thể lỗi."
+    "⚠️ VITE_GEMINI_API_KEY chưa được cấu hình. Các chức năng dùng Gemini (rewrite, profile) có thể không hoạt động."
   );
 }
 
 // Chỉ tạo client nếu có key
 const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
+/**
+ * 🧩 Helper gọi backend (/api/*)
+ * - ĐÃ FIX lỗi "body stream already read" bằng cách chỉ đọc body 1 lần
+ */
 async function callBackend<T = any>(path: string, body: any): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
@@ -21,21 +26,31 @@ async function callBackend<T = any>(path: string, body: any): Promise<T> {
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    try {
-      const err = await res.json();
-      throw new Error(err.error || err.detail || `Request failed: ${res.status}`);
-    } catch {
-      const text = await res.text();
-      throw new Error(text || `Request failed: ${res.status}`);
-    }
+  // ❗Chỉ đọc stream 1 lần
+  const rawText = await res.text();
+
+  let json: any;
+  try {
+    json = JSON.parse(rawText);
+  } catch {
+    json = rawText;
   }
 
-  return res.json();
+  if (!res.ok) {
+    const msg =
+      json?.error ||
+      json?.detail ||
+      rawText ||
+      `Request failed: ${res.status}`;
+    throw new Error(msg);
+  }
+
+  return json as T;
 }
 
 /**
- * 📷 Photo Editor (BFL qua backend /api/photo-editor)
+ * 📷 PHOTO EDITOR – dùng BFL qua backend /api/photo-editor
+ *   Trả về base64 của ảnh đã edit
  */
 export const editImageWithGemini = async (
   base64Image: string,
@@ -58,14 +73,15 @@ export const editImageWithGemini = async (
     "";
 
   if (!img) {
-    throw new Error("Photo Editor: No image returned from API.");
+    throw new Error("Photo Editor: API không trả về ảnh.");
   }
 
   return img;
 };
 
 /**
- * 😂 Meme Generator (BFL qua backend /api/meme-gen)
+ * 😂 MEME GENERATOR – dùng BFL qua backend /api/meme-gen
+ *   Trả về base64 của meme
  */
 export const generateMeme = async (
   prompt: string,
@@ -91,20 +107,22 @@ export const generateMeme = async (
     "";
 
   if (!img) {
-    throw new Error("Meme Gen: No image returned from API.");
+    throw new Error("Meme Gen: API không trả về ảnh.");
   }
 
   return img;
 };
 
 /**
- * 🧩 Notion-style Personal Profile generator
+ * 🧾 NOTION-STYLE PROFILE – Gemini text
  */
 export const generateNotionProfile = async (
   userInfo: string
 ): Promise<string> => {
   if (!ai) {
-    throw new Error("Thiếu VITE_GEMINI_API_KEY (Notion Profile).");
+    throw new Error(
+      "Thiếu VITE_GEMINI_API_KEY nên không tạo được Notion Profile."
+    );
   }
 
   try {
@@ -127,6 +145,7 @@ export const generateNotionProfile = async (
       contents: prompt,
     });
 
+    // Tùy SDK, bạn đang dùng response.text nên giữ như cũ
     let text = (response as any).text || "";
     text = text.replace(/```html/g, "").replace(/```/g, "");
     return text;
@@ -137,14 +156,16 @@ export const generateNotionProfile = async (
 };
 
 /**
- * ✍️ Rewrite text in styles
+ * ✍️ REWRITE TEXT – Gemini text
  */
 export const rewriteText = async (
   text: string,
   style: string
 ): Promise<string> => {
   if (!ai) {
-    throw new Error("Thiếu VITE_GEMINI_API_KEY (Rewrite Text).");
+    throw new Error(
+      "Thiếu VITE_GEMINI_API_KEY nên không dùng được Rewrite Text."
+    );
   }
 
   try {
