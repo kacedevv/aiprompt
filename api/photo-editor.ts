@@ -1,18 +1,8 @@
-// api/photo-editor.ts
-// Serverless function cho Vercel (Node runtime)
-// Mode: edit / upscale / enhance tùy bạn dùng trong frontend
-
 export const config = {
   runtime: "nodejs",
 };
 
-type PhotoEditRequestBody = {
-  prompt?: string;
-  mode?: "edit" | "upscale" | "enhance" | string;
-  imageBase64: string;
-};
-
-export default async function handler(req: any, res: any) {
+export default async function handler(req, res) {
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
@@ -21,82 +11,60 @@ export default async function handler(req: any, res: any) {
   }
 
   if (req.method !== "POST") {
-    return res.status(405).json({ error: "Only POST is allowed" });
+    return res.status(405).json({ error: "Only POST allowed" });
   }
 
   res.setHeader("Access-Control-Allow-Origin", "*");
 
   const BFL_API_KEY = process.env.BFL_API_KEY;
-
   if (!BFL_API_KEY) {
-    return res.status(500).json({
-      error: "Missing BFL_API_KEY in Vercel Environment Variables",
-    });
+    return res.status(500).json({ error: "Missing BFL_API_KEY" });
   }
 
   try {
-    const body: PhotoEditRequestBody =
-      typeof req.body === "object" && req.body !== null
-        ? req.body
-        : await new Promise((resolve, reject) => {
-            let data = "";
-            req.on("data", (chunk: any) => (data += chunk));
-            req.on("end", () => {
-              try {
-                resolve(JSON.parse(data || "{}"));
-              } catch (e) {
-                reject(e);
-              }
-            });
-            req.on("error", reject);
-          });
-
-    const { prompt, mode = "edit", imageBase64 } = body;
-
-    if (!imageBase64) {
-      return res.status(400).json({ error: "imageBase64 is required" });
-    }
-
-    // ⚠️ Endpoint ví dụ, chỉnh theo docs BFL bạn dùng
-    const apiUrl =
-      mode === "upscale"
-        ? "https://api.bfl.ai/v1/image/upscale"
-        : "https://api.bfl.ai/v1/image/edit";
+    const { prompt, imageBase64 } = await new Promise((resolve) => {
+      let data = "";
+      req.on("data", (chunk) => (data += chunk));
+      req.on("end", () => resolve(JSON.parse(data)));
+    });
 
     const payload = {
-      prompt: prompt || "photo editing",
-      image: imageBase64,
-      mode,
+      prompt,
+      image_prompt: imageBase64,
+      strength: 0.75,
+      output_format: "png"
     };
 
-    const response = await fetch(apiUrl, {
+    const response = await fetch("https://api.bfl.ml/v1/flux-pro-1.1-ultra", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${BFL_API_KEY}`,
+        "X-Key": BFL_API_KEY,
       },
       body: JSON.stringify(payload),
     });
 
-    if (!response.ok) {
-      const text = await response.text();
-      return res.status(response.status).json({
-        error: "BFL API Error",
-        detail: text,
-      });
+    const raw = await response.text();
+
+    let json;
+    try {
+      json = JSON.parse(raw);
+    } catch {
+      return res.status(500).json({ error: raw });
     }
 
-    const result = await response.json();
+    if (!response.ok) {
+      return res.status(500).json({ error: "BFL API Error", detail: json });
+    }
 
     return res.status(200).json({
       success: true,
-      result,
+      result: json,
     });
-  } catch (err: any) {
-    console.error("Photo Editor Error:", err);
+  } catch (e) {
     return res.status(500).json({
-      error: "Photo edit failed",
-      detail: err?.message || String(err),
+      error: "Photo Edit Error",
+      detail: e.message,
     });
   }
 }
