@@ -1,23 +1,19 @@
 import { GoogleGenAI } from "@google/genai";
 
-// 🧠 GEMINI cho text (chạy trên frontend)
-// Dùng biến Vite: VITE_GEMINI_API_KEY
+// 🔑 GEMINI cho text (frontend dùng Vite env)
 const GEMINI_API_KEY = import.meta.env.VITE_GEMINI_API_KEY as
   | string
   | undefined;
 
 if (!GEMINI_API_KEY) {
-  throw new Error(
-    "❌ Missing VITE_GEMINI_API_KEY. Hãy set trong .env hoặc Vercel."
+  console.warn(
+    "⚠️ VITE_GEMINI_API_KEY chưa được set. Các chức năng text (rewrite, profile) có thể lỗi."
   );
 }
 
-// Gemini client
-const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+// Chỉ tạo client nếu có key
+const ai = GEMINI_API_KEY ? new GoogleGenAI({ apiKey: GEMINI_API_KEY }) : null;
 
-/**
- * Helper: gọi API backend (meme-gen / photo-editor)
- */
 async function callBackend<T = any>(path: string, body: any): Promise<T> {
   const res = await fetch(path, {
     method: "POST",
@@ -39,7 +35,7 @@ async function callBackend<T = any>(path: string, body: any): Promise<T> {
 }
 
 /**
- * 📷 Photo Editor (dùng BFL qua backend /api/photo-editor)
+ * 📷 Photo Editor (BFL qua backend /api/photo-editor)
  */
 export const editImageWithGemini = async (
   base64Image: string,
@@ -54,7 +50,6 @@ export const editImageWithGemini = async (
 
   const result = data.result ?? data;
 
-  // Cố gắng lấy base64 từ nhiều field khác nhau cho chắc
   const img =
     result.imageBase64 ||
     result.sample ||
@@ -70,7 +65,7 @@ export const editImageWithGemini = async (
 };
 
 /**
- * 😂 Meme Generator (dùng BFL qua backend /api/meme-gen)
+ * 😂 Meme Generator (BFL qua backend /api/meme-gen)
  */
 export const generateMeme = async (
   prompt: string,
@@ -103,11 +98,15 @@ export const generateMeme = async (
 };
 
 /**
- * 🧩 Notion-style Personal Profile generator (Gemini text)
+ * 🧩 Notion-style Personal Profile generator
  */
 export const generateNotionProfile = async (
   userInfo: string
 ): Promise<string> => {
+  if (!ai) {
+    throw new Error("Thiếu VITE_GEMINI_API_KEY (Notion Profile).");
+  }
+
   try {
     const prompt = `
       Create a single-file HTML (Tailwind CDN) for a Notion-style Personal Profile Page.
@@ -128,7 +127,6 @@ export const generateNotionProfile = async (
       contents: prompt,
     });
 
-    // tuỳ phiên bản SDK, bạn đang dùng response.text nên tôi giữ nguyên
     let text = (response as any).text || "";
     text = text.replace(/```html/g, "").replace(/```/g, "");
     return text;
@@ -139,12 +137,16 @@ export const generateNotionProfile = async (
 };
 
 /**
- * ✍️ Rewrite text in styles (Gemini text)
+ * ✍️ Rewrite text in styles
  */
 export const rewriteText = async (
   text: string,
   style: string
 ): Promise<string> => {
+  if (!ai) {
+    throw new Error("Thiếu VITE_GEMINI_API_KEY (Rewrite Text).");
+  }
+
   try {
     const prompt = `
       Rewrite the text below in Vietnamese, in the style: ${style}.
